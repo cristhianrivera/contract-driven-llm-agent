@@ -1,0 +1,83 @@
+# Pre- and post-generation guardrails.
+#
+# PRE-GENERATION guards run before the LLM call and can abort early.
+# POST-GENERATION guards run after SQL is produced; violations trigger
+# block_retry (Reconciler) or flag_review (Parallel Validator).
+
+version: 1
+
+pre_generation:
+  - id: G_PRE_001
+    name: scope_check
+    description: >
+      Verify the query falls within the domain scope declared in the ontology
+      before generating SQL. If the router scores the query as out-of-scope
+      (confidence < threshold), decline without calling the LLM.
+    action: decline_if_out_of_scope
+    threshold: 0.80
+    # Below this score the query is treated as out-of-scope.
+
+  - id: G_PRE_002
+    name: pii_input_check
+    description: >
+      Scan the user query for patterns that suggest PII input (email addresses,
+      national ID formats, phone numbers). If detected, ask the user to
+      rephrase without personal data rather than forwarding PII to the LLM.
+    action: ask_rephrase
+    patterns:
+      - "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"   # email
+      - "\b\d{8}[A-Z]\b"                                    # DNI (Spain)
+      - "\b\d{3}[-.]?\d{3}[-.]?\d{4}\b"                  # phone
+
+  - id: G_PRE_003
+    name: ambiguity_check
+    description: >
+      If the query references a metric by a known ambiguous alias (one that
+      maps to more than one metric.id in the ontology), ask the user to
+      clarify before generating SQL.
+    action: ask_clarification
+    # Ambiguous aliases are flagged during ontology load; no static list here.
+
+post_generation:
+  - id: G_POST_001
+    name: reconciler_policy_check
+    description: >
+      Run the Reconciler against all rules in config/sql_policy.yaml.
+      Any violation triggers block_retry with the matching retry_hint.
+    action: block_retry
+    max_retries: 2
+    # After 2 failed retries, return a structured error to the user:
+    # "I was unable to generate a valid query for this request."
+
+  - id: G_POST_002
+    name: parallel_validator
+    description: >
+      Send the generated SQL and the relevant ontology excerpt to a second
+      LLM call. The validator checks:
+        (a) every column name exists in the declared schema
+        (b) every metric is aggregated according to its additivity rule
+        (c) every filter predicate matches the declared filter_predicates
+      Returns PASS / FAIL + reason. FAIL triggers flag_review.
+    action: flag_review_on_fail
+    # flag_review logs the failure and surfaces a warning to the user:
+    # "This answer has low confidence — please verify the numbers."
+
+  - id: G_POST_003
+    name: empty_result_check
+    description: >
+      If the query executes successfully but returns zero rows, do not return
+      "No results found" silently. Explain why the result may be empty
+      (time range outside data coverage, filter too restrictive, etc.) and
+      suggest a relaxed query.
+    action: explain_empty_result
+
+  - id: G_POST_004
+    name: pii_output_check
+    description: >
+      Scan the query result for PII patterns before returning it to the user.
+      If PII is detected in the output (e.g. a name column was inadvertently
+      included), redact it and log the incident.
+    action: redact_and_log
+    patterns:
+      - "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+      - "\b\d{8}[A-Z]\b"

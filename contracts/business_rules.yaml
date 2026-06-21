@@ -1,0 +1,98 @@
+# Domain-agnostic business rules applied across all tenants.
+#
+# These rules encode analytical conventions that are correct regardless of
+# which customer domain is loaded. Domain-specific rules belong in
+# config/sql_policy.yaml under the relevant scope.
+#
+# Important framing: in a prompt-only system, rules like these exist as text
+# the model reads and is expected to follow. They work — until they don't,
+# silently, under phrasing conditions that weren't in the few-shot examples.
+# The rules here are identical in content to what you would write in a prompt.
+# What changes is enforcement: violation_action and retry_hint are not
+# instructions to the model — they are inputs to the Reconciler, which runs
+# in code post-generation and blocks or retries regardless of model intent.
+# The goal is not zero failures. It is legible failures: every violation is
+# caught, named, and handled in a known, bounded way rather than silently.
+
+version: 1
+
+rules:
+  - id: BR001
+    name: non_additive_no_sum
+    description: >
+      Non-additive metrics (snapshots, ratios) must never be aggregated with
+      SUM() across the non-additive dimension. For snapshot metrics, use the
+      last period's value. For ratio metrics, recompute from the raw numerator
+      and denominator.
+    applies_to: metrics where additivity = non_additive
+    violation_action: block_retry
+    retry_hint: >
+      This metric is non-additive. Do not use SUM() across periods.
+      For a snapshot: use the value at the most recent period.
+      For a ratio: recompute as numerator / NULLIF(denominator, 0).
+
+  - id: BR002
+    name: snapshot_table_temporal_fence
+    description: >
+      Any query against a snapshot table must include a temporal fence that
+      restricts results to the latest snapshot date. Omitting the fence
+      returns all historical versions of each row, producing duplicates.
+    applies_to: tables where storage_type = snapshot
+    violation_action: block_retry
+    retry_hint: >
+      Add a temporal fence: WHERE snapshot_date = (SELECT MAX(snapshot_date)
+      FROM <table>). This table stores one row per entity per snapshot date —
+      without the fence you get every historical version.
+
+  - id: BR003
+    name: forecast_latest_vintage
+    description: >
+      Queries against forecast views must select only the latest forecast
+      vintage (MAX(fecha_generacion) or equivalent). Older vintages exist in
+      the view and will be returned without this filter, producing inflated
+      row counts and stale predictions.
+    applies_to: tables where table_type = forecast_view
+    violation_action: block_retry
+    retry_hint: >
+      Add a vintage filter: WHERE fecha_generacion = (SELECT MAX(fecha_generacion)
+      FROM <forecast_view>). Forecast views retain all historical vintages —
+      always pin to the latest.
+
+  - id: BR004
+    name: ratio_recompute_from_components
+    description: >
+      Ratio metrics (occupancy, absentismo rate, etc.) stored as pre-computed
+      percentages in a fact table must be recomputed from their raw components
+      when aggregated over any scope wider than the stored grain. Aggregating
+      the stored ratio directly produces a mathematically incorrect weighted
+      average.
+    applies_to: metrics where additivity = non_additive and metric_type = ratio
+    violation_action: block_retry
+    retry_hint: >
+      Recompute the ratio from its components:
+      SUM(numerator_column) / NULLIF(SUM(denominator_column), 0) * 100.
+      Never SUM or AVG the pre-computed ratio column across rows.
+
+  - id: BR005
+    name: no_implicit_cross_join
+    description: >
+      Queries that reference two fact tables without an explicit JOIN condition
+      produce a Cartesian product. This is never correct in this system.
+    applies_to: all queries
+    violation_action: block_retry
+    retry_hint: >
+      Every pair of tables in the FROM clause must have an explicit JOIN
+      condition. Remove any implicit cross-join (comma-separated tables without
+      ON clause) and add the correct join key.
+
+  - id: BR006
+    name: out_of_scope_decline
+    description: >
+      Questions outside the declared domain scope must be declined politely.
+      The agent must not attempt to answer general knowledge questions, perform
+      creative tasks, or query tables outside the loaded ontology.
+    applies_to: all queries
+    violation_action: decline
+    decline_message: >
+      I can only answer questions about the data domains I have been configured
+      for. This question falls outside that scope.

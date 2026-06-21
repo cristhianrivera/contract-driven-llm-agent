@@ -1,0 +1,90 @@
+# SQL generation policy for the "acme" data domain.
+#
+# This is a TEMPLATE / EXAMPLE file. Replace every value below with your
+# own domain's role prefix, data domain, and business rules.
+#
+# The reconciler enforces these rules AFTER the LLM generates SQL and
+# BEFORE the query reaches the database. Rules are evaluated top-to-bottom;
+# first match wins within each scope.
+
+version: 1
+
+default:
+  # Global defaults applied to all roles unless overridden by a scope block.
+  # In this template, the default and acme scope values are intentionally
+  # identical — they exist to show the override structure, not to diverge.
+  # In a real deployment with multiple domains, scopes would override these
+  # defaults selectively: e.g. a domain with wider analytical queries might
+  # raise max_joins to 5 while leaving forbidden_patterns unchanged.
+  max_joins: 3
+  max_ctes: 4
+  forbidden_patterns:
+    - pattern: "FULL OUTER JOIN"
+      reason: "Full outer joins produce cross-domain row explosion; rewrite as two left joins."
+    - pattern: "UNION ALL"
+      reason: "UNION ALL proliferation bypasses metric contracts; use a single fact view with a filter predicate."
+    - pattern: "SELECT \*"
+      reason: "Star selects break column contracts and leak unreferenced columns to the user."
+  require_predicates:
+    # Every query that touches a snapshot table must include a temporal fence.
+    - table: "sales.contracts"
+      predicate: "snapshot_date = (SELECT MAX(snapshot_date) FROM sales.contracts)"
+      reason: "contracts is a snapshot table; querying without the temporal fence returns duplicates."
+
+scopes:
+  - match:
+      role_prefix: "acme_"
+    mode: block_retry
+    data_domain: acme
+
+    # Per-scope overrides. Values here take precedence over `default` for any
+    # role matching the prefix above. Add only the fields you want to diverge.
+    max_joins: 3
+    max_ctes: 4
+
+    forbidden_patterns:
+      - pattern: "FULL OUTER JOIN"
+        reason: "Full outer joins produce row explosion against the acme schema; use LEFT JOIN."
+      - pattern: "UNION ALL"
+        reason: "Use a single fact view with an indicador filter instead of UNION ALL."
+
+    # Metric-specific guards: prevent silent aggregation errors
+    metric_guards:
+      # occupancy is a ratio snapshot — never aggregate the stored value directly
+      - metric: metric.occupancy
+        forbidden_aggregations: ["SUM(valor)", "AVG(valor)"]
+        required_expression: >
+          SUM(CASE WHEN indicador = 'used_slots' THEN valor END)::numeric
+          / NULLIF(SUM(CASE WHEN indicador = 'total_slots' THEN valor END), 0) * 100
+        reason: >
+          occupancy is a daily snapshot ratio. Recompute over the desired scope
+          from the raw used_slots / total_slots counts — never aggregate `valor` directly.
+
+      # contratos_planta is a non-additive monthly snapshot
+      - metric: metric.contracts_active
+        forbidden_aggregations: ["SUM(valor)"]
+        reason: >
+          Active contract count is a monthly snapshot (non-additive). For a period,
+          use the last month's value — never SUM across months.
+
+    # Temporal boundary rules
+    temporal_guards:
+      # forecast views carry a forecast-generation timestamp; always use the latest vintage
+      - table: "sales.orders_forecasts_v"
+        require_latest_vintage: true
+        vintage_column: fecha_generacion
+        reason: "Always select the latest forecast vintage to avoid stale predictions."
+
+    # Hints injected into the retry prompt when a rule is violated
+    retry_hints:
+      FULL_OUTER_JOIN: >
+        Rewrite as two LEFT JOINs and COALESCE the keys. Do not use FULL OUTER JOIN.
+      UNION_ALL: >
+        Use a single fact view with a WHERE indicador IN (...) clause instead of
+        UNION ALL across multiple subqueries.
+      STAR_SELECT: >
+        List columns explicitly. Never use SELECT *.
+      SNAPSHOT_FENCE_MISSING: >
+        Add the temporal fence: WHERE snapshot_date = (SELECT MAX(snapshot_date)
+        FROM sales.contracts). This table is a snapshot — omitting the fence
+        returns all historical versions of each contract.

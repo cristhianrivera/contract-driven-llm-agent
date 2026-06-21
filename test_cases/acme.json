@@ -1,0 +1,175 @@
+[
+  {
+    "id": "TC001",
+    "description": "Canonical metric query — orders by region with date range",
+    "query": "Show me orders by region for January 2026",
+    "expected_tables": ["sales.orders_forecasts_v", "sales.acme_regions"],
+    "expected_columns": ["des_region", "valor"],
+    "expected_predicates": [
+      "indicador = 'orders'",
+      "metrica = 'Forecast'",
+      "fecha_generacion",
+      "order_date"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC002",
+    "description": "Alias resolution — 'confirmed orders' must resolve to metric.orders",
+    "query": "How many confirmed orders did we have last month by region?",
+    "expected_tables": ["sales.orders_forecasts_v", "sales.acme_regions"],
+    "expected_columns": ["des_region", "valor"],
+    "expected_predicates": [
+      "indicador = 'orders'",
+      "metrica = 'Forecast'"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC003",
+    "description": "BR002 — snapshot table must include temporal fence",
+    "query": "How many active contracts do we have by region?",
+    "expected_tables": ["sales.contracts"],
+    "expected_columns": ["cod_region"],
+    "expected_predicates": [
+      "snapshot_date = (SELECT MAX(snapshot_date) FROM sales.contracts)"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC004",
+    "description": "BR001 — non-additive metric: occupancy must not use SUM(valor)",
+    "query": "What is the warehouse occupancy rate this month?",
+    "expected_tables": ["warehouse.daily_capacity"],
+    "expected_columns": ["used_slots", "total_slots"],
+    "expected_predicates": [
+      "metrica = 'Snapshot'"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC005",
+    "description": "BR003 — forecast view must pin to latest vintage",
+    "query": "Show me the revenue forecast for the next 3 months",
+    "expected_tables": ["sales.revenue_forecasts_v"],
+    "expected_columns": ["valor"],
+    "expected_predicates": [
+      "fecha_generacion",
+      "indicador = 'revenue'",
+      "metrica = 'Forecast'"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC006",
+    "description": "BR006 — out-of-scope question must be declined",
+    "query": "What is the capital of France?",
+    "expected_tables": [],
+    "expected_columns": [],
+    "expected_predicates": [],
+    "should_decline": true
+  },
+  {
+    "id": "TC007",
+    "description": "BR006 — creative task must be declined",
+    "query": "Write me a poem about sales data",
+    "expected_tables": [],
+    "expected_columns": [],
+    "expected_predicates": [],
+    "should_decline": true
+  },
+  {
+    "id": "TC008",
+    "description": "Cancellations — multi-value indicador filter must be present",
+    "query": "Show total cancellations by region for Q1 2026",
+    "expected_tables": ["sales.cancellations_v", "sales.acme_regions"],
+    "expected_columns": ["des_region", "valor"],
+    "expected_predicates": [
+      "indicador IN ('CANCEL_CUSTOMER', 'CANCEL_STOCK', 'CANCEL_FRAUD')",
+      "order_date"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC009",
+    "description": "Channel dimension — filter must use exact equality, not ILIKE",
+    "query": "Show me online orders by region for January 2026",
+    "expected_tables": ["sales.orders_forecasts_v", "sales.acme_regions"],
+    "expected_columns": ["des_region", "valor"],
+    "expected_predicates": [
+      "channel = 'Online'",
+      "indicador = 'orders'"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC010",
+    "description": "Contract count — must use COUNT(DISTINCT cod_contract) with snapshot fence",
+    "query": "How many contracts are currently inactive?",
+    "expected_tables": ["sales.contracts"],
+    "expected_columns": ["cod_contract"],
+    "expected_predicates": [
+      "snapshot_date = (SELECT MAX(snapshot_date) FROM sales.contracts)",
+      "status = 'INACTIVE'"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC011",
+    "description": "Multi-metric query — orders and cancellations must not use FULL OUTER JOIN",
+    "query": "Compare orders and cancellations by region for January 2026",
+    "expected_tables": ["sales.orders_forecasts_v", "sales.cancellations_v", "sales.acme_regions"],
+    "expected_columns": ["des_region"],
+    "expected_predicates": [
+      "indicador = 'orders'",
+      "indicador IN ('CANCEL_CUSTOMER', 'CANCEL_STOCK', 'CANCEL_FRAUD')"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC012",
+    "description": "Temporal default — no date range specified, must use last complete month",
+    "query": "Show me revenue by region",
+    "expected_tables": ["sales.revenue_forecasts_v", "sales.acme_regions"],
+    "expected_columns": ["des_region", "valor"],
+    "expected_predicates": [
+      "indicador = 'revenue'",
+      "metrica = 'Forecast'",
+      "fecha_generacion"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC013",
+    "description": "Scope boundary — general knowledge adjacent to domain must be declined",
+    "query": "Which region has the best weather for a sales conference?",
+    "expected_tables": [],
+    "expected_columns": [],
+    "expected_predicates": [],
+    "should_decline": true
+  },
+  {
+    "id": "TC014",
+    "description": "BR004 — ratio metric must recompute from components, not AVG stored value",
+    "query": "What was the average warehouse occupancy across all regions in January?",
+    "expected_tables": ["warehouse.daily_capacity"],
+    "expected_columns": ["used_slots", "total_slots"],
+    "expected_predicates": [
+      "metrica = 'Snapshot'"
+    ],
+    "should_decline": false
+  },
+  {
+    "id": "TC015",
+    "description": "Scope tag — every generated SQL must include scope comment header",
+    "query": "Show me total orders for this year",
+    "expected_tables": ["sales.orders_forecasts_v"],
+    "expected_columns": ["valor"],
+    "expected_predicates": [
+      "indicador = 'orders'",
+      "metrica = 'Forecast'",
+      "fecha_generacion"
+    ],
+    "should_decline": false
+  }
+]

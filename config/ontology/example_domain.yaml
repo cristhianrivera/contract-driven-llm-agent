@@ -1,0 +1,351 @@
+# Ontology registry for the "acme" data domain.
+#
+# This is a TEMPLATE / EXAMPLE file. Replace every value below with your
+# own domain's metrics, dimensions, entities, and table bindings.
+#
+# What this file is NOT: a schema registry. The database schema is fetched
+# separately and injected into the generator prompt. This file encodes what
+# the schema alone cannot express — which table is canonical for a metric,
+# which filter predicates are mandatory, whether a metric can be summed across
+# time, what the valid join paths are. Those things exist as text in prompt-based
+# systems too. The difference here is they are machine-enforceable: the
+# Reconciler and Parallel Validator act on these declarations post-generation,
+# in code, regardless of what the model decided.
+#
+# Concepts defined here:
+#   metric.orders          — daily count of confirmed orders
+#   metric.revenue         — daily revenue in currency units
+#   metric.cancellations   — daily order cancellations
+#   dimension.day          — calendar-day dimension (derived from `order_date`)
+#   dimension.region       — sales region dimension
+#   entity.order           — an individual order record
+#
+# All bindings below are illustrative — verify column names before use.
+
+metrics:
+  - id: metric.orders
+    kind: metric
+    name: orders
+    display_name: "Orders"
+    description: >
+      Total confirmed orders per region/day. Stored as daily counts in `valor`,
+      keyed by region (`cod_region`) and date (`order_date`). Forecast variant
+      available in the _forecasts_v view (metrica = 'Forecast').
+    aliases:
+      - orders
+      - "confirmed orders"
+      - "order count"
+      - "total orders"
+    domain: acme
+    version: 1
+    grain:
+      temporal: DAY
+    additivity: additive
+    allowed_dimensions:
+      - dimension.day
+      - dimension.region
+    binding:
+      primary_table_fqn: sales.orders_forecasts_v
+      historical_table_fqn: sales.orders_v
+      value_column: valor
+      grain_columns:
+        day: order_date
+      filter_predicates:
+        - "metrica = 'Forecast'"
+        - "indicador = 'orders'"
+      historical_predicates:
+        - "indicador = 'orders'"
+
+  - id: metric.revenue
+    kind: metric
+    name: revenue
+    display_name: "Revenue"
+    description: >
+      Total revenue in currency units per region/month. Historical in
+      sales.revenue_v; forecast in sales.revenue_forecasts_v.
+      Unqualified 'revenue' sums all revenue types.
+    aliases:
+      - revenue
+      - "total revenue"
+      - "sales revenue"
+      - income
+    domain: acme
+    version: 1
+    grain:
+      temporal: MONTH
+      storage: first_of_period
+    additivity: additive
+    allowed_dimensions:
+      - dimension.day
+      - dimension.region
+    binding:
+      primary_table_fqn: sales.revenue_forecasts_v
+      historical_table_fqn: sales.revenue_v
+      value_column: valor
+      grain_columns:
+        month: order_date
+      filter_predicates:
+        - "metrica = 'Forecast'"
+        - "indicador = 'revenue'"
+      historical_predicates:
+        - "indicador = 'revenue'"
+
+  - id: metric.cancellations
+    kind: metric
+    name: cancellations
+    display_name: "Cancellations"
+    description: >
+      Total order cancellations per region/day (all reasons combined).
+      Default when the user says 'cancellations' without a reason qualifier.
+      `order_date` is the date the order was placed, not the cancellation date.
+    aliases:
+      - cancellations
+      - cancellation
+      - "total cancellations"
+      - cancelled
+    domain: acme
+    version: 1
+    grain:
+      temporal: DAY
+    additivity: additive
+    allowed_dimensions:
+      - dimension.day
+      - dimension.region
+    binding:
+      primary_table_fqn: sales.cancellations_v
+      value_column: valor
+      grain_columns:
+        day: order_date
+      filter_predicates:
+        - "indicador IN ('CANCEL_CUSTOMER', 'CANCEL_STOCK', 'CANCEL_FRAUD')"
+
+  - id: metric.occupancy
+    kind: metric
+    name: occupancy
+    display_name: "Warehouse Occupancy"
+    description: >
+      Occupancy percentage per warehouse/day. NEVER SUM/AVG the stored
+      'occupancy' column directly (it is a daily snapshot ratio). Recompute
+      over the desired scope as SUM(used_slots)/NULLIF(SUM(total_slots),0)*100.
+    aliases:
+      - occupancy
+      - "warehouse occupancy"
+      - "occupancy rate"
+    domain: acme
+    version: 1
+    grain:
+      temporal: DAY
+    additivity: non_additive
+    allowed_dimensions:
+      - dimension.day
+      - dimension.region
+    binding:
+      primary_table_fqn: warehouse.daily_capacity
+      value_column: valor
+      grain_columns:
+        day: snapshot_date
+      filter_predicates:
+        - "metrica = 'Snapshot'"
+      expression: "SUM(CASE WHEN indicador = 'used_slots' THEN valor END)::numeric / NULLIF(SUM(CASE WHEN indicador = 'total_slots' THEN valor END), 0) * 100"
+
+dimensions:
+  - id: dimension.day
+    kind: dimension
+    name: day
+    display_name: "Day"
+    description: >
+      Calendar-day dimension. Derived from the physical DATE column `order_date`.
+      Monthly label produced at query time via TO_CHAR(order_date, 'Month').
+      Used for day/month-level aggregation of order metrics.
+    aliases:
+      - day
+      - date
+      - month
+      - "order date"
+      - "day of year"
+    domain: acme
+    version: 1
+    grain:
+      temporal: DAY
+      storage: first_of_period
+    default_display_attribute: order_date
+    attributes:
+      - order_date
+      - month_label
+    hierarchy:
+      - dimension.month
+      - dimension.year
+    binding:
+      primary_table_fqn: sales.orders_forecasts_v
+      key_column: order_date
+      attribute_columns:
+        month_label: order_date   # derived via TO_CHAR at query time
+
+  - id: dimension.region
+    kind: dimension
+    name: region
+    display_name: "Sales Region"
+    description: >
+      Sales region — the default reporting grain for this domain.
+      Fact rows carry the region code `cod_region`; the readable name
+      `des_region` and the country `des_country` come from
+      sales.acme_regions joined on cod_region.
+    aliases:
+      - region
+      - territory
+      - area
+      - zone
+      - country
+    domain: acme
+    version: 1
+    grain:
+      temporal: POINT_IN_TIME
+    default_display_attribute: des_region
+    attributes:
+      - cod_region
+      - des_region
+      - des_country
+    binding:
+      primary_table_fqn: sales.acme_regions
+      key_column: cod_region
+      attribute_columns:
+        des_region: des_region
+        des_country: des_country
+
+  - id: dimension.channel
+    kind: dimension
+    name: channel
+    display_name: "Sales Channel"
+    description: >
+      Sales channel. Allowed EXACT values: 'Online', 'Retail', 'Wholesale',
+      'Partner'. Always filter with exact equality (channel = 'Online'),
+      never ILIKE substrings.
+    aliases:
+      - channel
+      - "sales channel"
+      - online
+      - retail
+      - wholesale
+    domain: acme
+    version: 1
+    grain:
+      temporal: POINT_IN_TIME
+    default_display_attribute: channel
+    attributes:
+      - channel
+    binding:
+      primary_table_fqn: sales.orders_v
+      key_column: channel
+      attribute_columns:
+        channel: channel
+
+entities:
+  - id: entity.order
+    kind: entity
+    name: order
+    display_name: "Order"
+    description: >
+      An individual sales order. Orders are stored as individual rows keyed
+      by `cod_order`. The order VARIANT is carried by the `indicador` column:
+      'confirmed' (total placed) and 'shipped' (fulfilled subset).
+      Region-level facts live in sales.orders_v (+ _forecasts_v).
+    aliases:
+      - order
+      - orders
+      - "sales order"
+      - "confirmed order"
+      - shipment
+    domain: acme
+    version: 1
+    identifier_attribute: cod_order
+    attributes:
+      - cod_order
+      - cod_region
+      - channel
+      - order_date
+      - valor
+      - indicador
+    binding:
+      primary_table_fqn: sales.orders_v
+      identifier_column: cod_order
+      attribute_columns:
+        valor: valor
+        order_date: order_date
+        cod_region: cod_region
+
+  - id: entity.contract
+    kind: entity
+    name: contract
+    display_name: "Contract"
+    description: >
+      An individual customer contract (latest snapshot only). HARD RULE: every
+      query against sales.contracts MUST filter
+      snapshot_date = (SELECT MAX(snapshot_date) FROM sales.contracts).
+      Count with COUNT(DISTINCT cod_contract). 'Inactive' = status = 'INACTIVE'.
+    aliases:
+      - contract
+      - contracts
+      - "customer contract"
+      - agreement
+    domain: acme
+    version: 1
+    identifier_attribute: cod_contract
+    attributes:
+      - cod_contract
+      - customer_name
+      - cod_region
+      - contract_value
+      - status
+      - start_date
+      - end_date
+      - snapshot_date
+    binding:
+      primary_table_fqn: sales.contracts
+      identifier_column: cod_contract
+      attribute_columns:
+        customer_name: customer_name
+        cod_region: cod_region
+        contract_value: contract_value
+        status: status
+        start_date: start_date
+        end_date: end_date
+        snapshot_date: snapshot_date
+
+relations:
+  - id: relation.orders_region
+    kind: relation
+    name: orders_region
+    display_name: "Orders by Region"
+    description: >
+      Join path from the orders forecast fact view to the region dictionary.
+    domain: acme
+    source: metric.orders
+    target: dimension.region
+    relation_type: joins_on
+    sql_on: "orders_forecasts_v.cod_region = acme_regions.cod_region"
+
+  - id: relation.order_region
+    kind: relation
+    name: order_region
+    display_name: "Order by Region"
+    description: >
+      Join path from the historical orders fact view to the region dictionary.
+    domain: acme
+    source: entity.order
+    target: dimension.region
+    relation_type: joins_on
+    sql_on: "orders_v.cod_region = acme_regions.cod_region"
+
+scope:
+  domain_description: >
+    This assistant answers questions exclusively about Acme Corp sales data:
+    order forecasts, confirmed orders, revenue, cancellations, warehouse
+    occupancy, and contract portfolio — at region, channel, and day/month level.
+    It does not answer general knowledge questions or topics unrelated to
+    these data domains.
+  out_of_scope_examples:
+    - "What is the capital of France?"
+    - "Write me a poem"
+    - "How do I invest in stocks?"
+    - "What is the weather today?"
+    - "Translate this text to Spanish"

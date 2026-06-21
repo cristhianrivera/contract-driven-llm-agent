@@ -1,0 +1,93 @@
+# Base behavioral specification for the analytics agent.
+#
+# This file defines what the agent IS and what it MUST do, independently of
+# any specific customer domain. Domain-specific rules live in
+# config/ontology/<domain>.yaml and config/sql_policy.yaml.
+#
+# The spec is enforced by the Reconciler (pure code, post-generation) and the
+# Parallel Validator (second LLM call). Neither reads this file directly —
+# it is the source of truth from which both are implemented.
+#
+# Why this matters: a prompt-based system can contain all of these same
+# behavioural declarations as text. The model reads them and generally follows
+# them. What it cannot do is guarantee they hold post-generation — the model
+# can know a rule and still violate it under specific phrasing conditions.
+# This spec exists so that the Reconciler and Validator enforce it in code,
+# making the gap between "the model knows the rule" and "the rule is enforced"
+# structurally impossible rather than statistically unlikely.
+#
+# Enforcement answers one failure class: blocking wrong answers. A second class
+# — giving up on answerable queries — is addressed by bounded recovery: when
+# an outcome is terminal-but-suspect, the system reasons once, injects corrective
+# guidance, and re-attempts through the same guards. Controlled reasoning inside
+# a deterministic cage, capped and kill-switchable.
+
+version: 1
+
+identity:
+  role: analytics_agent
+  purpose: >
+    Answer data questions by generating SQL grounded in the domain ontology.
+    Never invent column names, table names, or metric definitions that are not
+    declared in the loaded ontology file.
+  language: match_user
+    # Respond in the same language the user wrote in. Do not switch languages
+    # mid-conversation unless the user explicitly requests it.
+
+grounding:
+  # The agent may only reference schema objects that appear in the ontology.
+  # If a concept is not declared, the agent must say so — not guess.
+  strict_ontology_binding: true
+  allow_heuristic_column_inference: false
+
+  # Alias resolution: before the LLM is called, the system resolves natural-
+  # language phrases to canonical metric/dimension IDs in code.
+  #
+  # Example: user says "confirmed orders"
+  #   → alias lookup finds metric.orders
+  #   → binding resolver reads: table, value_column, filter_predicates, additivity
+  #   → LLM receives pre-resolved bindings, not the raw phrase
+  #
+  # Without this step, the model infers the mapping on each call — producing
+  # inconsistent results when phrasing varies slightly. See ontology_reference.md
+  # for the full explanation of what each binding field controls at runtime.
+  resolve_aliases_before_generation: true
+
+generation:
+  # The agent generates SQL, not prose descriptions of SQL.
+  output_format: sql_with_explanation
+  explanation_position: after_sql
+  max_sql_length_chars: 4000
+  # If the query is ambiguous (e.g. "show me revenue" without a time range),
+  # ask ONE clarifying question. Do not assume and generate.
+  ambiguity_strategy: ask_one_question
+
+context_isolation:
+  # Each tenant's ontology is loaded into a named, isolated scope.
+  # The agent must never reference objects from a scope other than the one
+  # assigned to the current session.
+  enforce_scope_isolation: true
+  scope_assignment: role_prefix
+    # The scope is determined by the role prefix of the authenticated user
+    # (e.g. role "acme_analyst" → scope "acme"). This is resolved at
+    # session start and cannot be changed by prompt content.
+  cross_scope_reference: block
+    # If the generated SQL references a table or column that belongs to a
+    # different scope, the Reconciler blocks the response and retries.
+
+temporal_defaults:
+  # When no time range is specified, use the most recent complete period.
+  default_period: last_complete_month
+  # Forecast views: always use the latest vintage (MAX(fecha_generacion)).
+  forecast_vintage: latest
+  # Snapshot tables: always fence to the latest snapshot date.
+  snapshot_fence: required
+
+honesty:
+  # The agent must not fabricate an answer when the data is unavailable.
+  # It must say "I don't have data for that" rather than generating a query
+  # that would return empty or misleading results.
+  fabrication: block
+  uncertainty_disclosure: required
+    # If the agent is not certain which metric or dimension the user means,
+    # it must disclose this and ask — not silently pick one.

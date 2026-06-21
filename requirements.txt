@@ -1,0 +1,6 @@
+# Core dependency for AST-based SQL policy checks (system_metrics.py)
+sqlglot>=20.0.0
+
+# Standard library only beyond this point — no additional packages required
+# to run the evaluation harness. Install your own LLM client (anthropic,
+# openai, etc.) separately and wire it into agent_fn.

@@ -1,0 +1,38 @@
+# Tool policies per role.
+#
+# allowTools: empty list = all tools permitted for this role.
+#             non-empty list = only listed agent types are instantiated for this role.
+# requireApprovalFor: agent types that require explicit approval before running.
+# maxToolCalls: cap on total agent invocations per session.
+# costCeiling: max USD spend per query across all LLM calls for this role.
+#
+# Agent type keys correspond to the registered agent types in the system.
+# Common types:
+#   text2sql  — SQL generation against the domain ontology (core)
+#   chart     — chart / visualization generation from query results
+#   analyst   — analytical commentary and explanation
+#   purellm   — free-form LLM response (no SQL; for general questions)
+#
+# Extend with your own roles; the loader is fail-open — a missing or malformed
+# file logs a WARNING and falls back to permissive defaults.
+
+roles:
+  analyst:              # standard role — full access, standard ceilings
+    allowTools: []
+    requireApprovalFor: []
+    maxToolCalls: 30
+    costCeiling: 5.0
+
+  viewer:               # read-only role — SQL and charts only, no free-form LLM
+    allowTools:
+      - text2sql
+      - chart
+    requireApprovalFor: []
+    maxToolCalls: 15
+    costCeiling: 2.0
+
+  admin:                # elevated role — all tools, higher ceilings
+    allowTools: []
+    requireApprovalFor: []
+    maxToolCalls: 50
+    costCeiling: 10.0
