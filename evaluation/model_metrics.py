@@ -33,6 +33,7 @@ from pathlib import Path
 class TestCase:
     id: str
     query: str
+    description: str = ""                       # human-readable label for the case
     expected_sql: Optional[str] = None          # exact SQL match (optional)
     expected_tables: list[str] = field(default_factory=list)   # tables that must appear
     expected_columns: list[str] = field(default_factory=list)  # columns that must appear
@@ -49,6 +50,7 @@ class ModelMetricsResult:
     prompt_tokens: int
     completion_tokens: int
     cost_usd: float
+    description: str = ""          # human-readable label, carried through from the test case
     # Accuracy dimensions
     exact_match: bool = False
     table_coverage: float = 0.0     # fraction of expected_tables present
@@ -99,6 +101,7 @@ def run_model_metrics(
             result = ModelMetricsResult(
                 test_id=tc.id,
                 query=tc.query,
+                description=tc.description,
                 generated_sql=sql,
                 latency_ms=latency_ms,
                 prompt_tokens=usage.get("prompt_tokens", 0),
@@ -118,6 +121,7 @@ def run_model_metrics(
             result = ModelMetricsResult(
                 test_id=tc.id,
                 query=tc.query,
+                description=tc.description,
                 generated_sql=None,
                 latency_ms=latency_ms,
                 prompt_tokens=0,
@@ -173,6 +177,7 @@ if __name__ == "__main__":
         return ("SELECT 1", {"prompt_tokens": 100, "completion_tokens": 50, "cost_usd": 0.001})
 
     summary = run_model_metrics(args.domain, args.suite, mock_agent_fn, args.output)
+    print("NOTE: stub agent_fn — low coverage below is expected. See README.\n")
     print(f"Avg predicate coverage:{summary['avg_predicate_coverage']:.1%}")
     print(f"Avg table coverage:    {summary['avg_table_coverage']:.1%}")
     print(f"Avg column coverage:   {summary['avg_column_coverage']:.1%}")
