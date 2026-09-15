@@ -51,6 +51,7 @@ def run_audit(
     snapshot_tables: list = None,
     non_additive_metrics: list = None,
     output_dir: str = "evaluation/reports",
+    using_stub_agent: bool = False,
 ) -> dict:
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -59,6 +60,12 @@ def run_audit(
     print(f"  contract-agent audit — domain: {domain}")
     print(f"  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     print(f"{'='*60}\n")
+
+    if using_stub_agent:
+        print("NOTE: no agent_fn supplied — running against mock_agent_fn, a stub that")
+        print("      returns one fixed SQL string for every query. A FAIL verdict below")
+        print("      is expected and says nothing about the harness. Wire in a real")
+        print("      agent_fn (see README) to get meaningful Layer 1 numbers.\n")
 
     # ── Layer 1 ────────────────────────────────────────────────────────────────
     print("LAYER 1 — Model Metrics")
@@ -103,6 +110,8 @@ def run_audit(
     print(f"  OVERALL: {overall}")
     print(f"  Layer 1 (model):    {'PASS' if l1_pass else 'FAIL'}")
     print(f"  Layer 2 (contract): {'PASS' if l2_pass else 'FAIL'}")
+    if using_stub_agent:
+        print("  (stub agent — Layer 1 FAIL is expected; see note above)")
     print(f"{'='*60}\n")
 
     report = {
@@ -146,4 +155,5 @@ if __name__ == "__main__":
         snapshot_tables=args.snapshot_tables,
         non_additive_metrics=args.non_additive_metrics,
         output_dir=args.output_dir,
+        using_stub_agent=True,
     )

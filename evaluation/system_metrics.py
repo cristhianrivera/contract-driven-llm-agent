@@ -389,6 +389,7 @@ if __name__ == "__main__":
         return ("-- scope: acme\nSELECT region, SUM(valor) FROM sales.orders_v GROUP BY region", {})
 
     summary = run_system_metrics(args.domain, args.suite, mock_agent_fn, output_path=args.output)
+    print("NOTE: stub agent_fn — these numbers reflect the stub, not a real agent. See README.\n")
     print(f"Contract compliance:  {summary['contract_compliance_rate']:.1%}")
     print(f"Blocked:             {summary['blocked']}/{summary['total_cases']}")
     print(f"Parse errors:        {summary['parse_errors']}/{summary['total_cases']}")
