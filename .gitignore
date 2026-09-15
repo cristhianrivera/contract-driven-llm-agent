@@ -1,0 +1,12 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Evaluation run artifacts — regenerated on every run, not source
+evaluation/reports/
+evaluation/results_model_metrics.json
+evaluation/results_system_metrics.json
+
+# Virtualenvs
+.venv/
+venv/
